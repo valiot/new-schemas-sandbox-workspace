@@ -1,0 +1,61 @@
+version: "3.9"
+services:
+
+  # Valiot App ---------------------------------------------------------------
+
+  valiot-app:
+    container_name: valiot-app
+    hostname: valiot-app
+    build:
+      context: .
+      dockerfile: ./valiot-app/Dockerfile
+    platform: $PLATFORM
+    command: ./run.sh dev
+    ports: 
+      - $VALIOT_APP_PORT:$CONTAINER_ELIXIR_APP_PORT
+    environment:
+      POD_ID: 0000-0001
+      SCHEMA_FILE: schema.graphql
+      DOMAIN: localhost
+      PORT: $CONTAINER_ELIXIR_APP_PORT
+      SECRET_KEY_BASE: secret
+      DATABASE_URL: ecto://postgres:postgres@valiot-app-db:5432/valiot_app
+      # REPLICAS_URLS: ecto://postgres:postgres@db:5432/valiot_app1,ecto://postgres:postgres@db:5432/valiot_app2
+      # FLAME_ON: true
+      LOG_LEVEL: info
+      QUEUE_TARGET: 500
+      TIMEOUT: 15000
+      POOL_SIZE: 10
+      STITCH_AUTHORIZATION: 
+      LIMIT_QUERY: 1000
+      STITCH_URL: http://auth:$CONTAINER_ELIXIR_APP_PORT/api 
+      LIMIT_COMPLEXITY: 6999
+    depends_on: 
+      valiot-app-db:
+        condition: service_healthy
+    healthcheck:
+      test: curl --fail http://localhost:$CONTAINER_ELIXIR_APP_PORT/api/graphiql?query=. || exit 1
+      timeout: 45s
+      interval: 10s
+      retries: 10
+    links:
+      - valiot-app-db
+    # volumes:
+    #   - ./valiot-app/cover:/valiot-app/priv/static/cover
+    #   - ./valiot-app/doc:/valiot-app/priv/static/doc
+
+  valiot-app-db:
+    container_name: valiot-app-db
+    hostname: valiot-app-db
+    build:
+      context: .
+      dockerfile: ./valiot-app-db/Dockerfile
+    restart: always
+    environment: 
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+    healthcheck:
+      test: pg_isready -q -d postgres -U postgres
+      timeout: 45s
+      interval: 10s
+      retries: 10

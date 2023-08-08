@@ -1,0 +1,116 @@
+# v0.11.0
+# (for test purposes) Foundation App - valiot-app
+
+type Author {
+  name: String! @unique
+  lastName: String! @unique
+  finishTurn: Time
+  dateOfBirth: Date
+  active: Boolean @default(value: false)
+  blogPosts: [BlogPost]
+  comments: [Comment]
+  avatar: Avatar @has_one
+  sponsor: Avatar
+  session: Float
+}
+
+type BlogPost {
+  author: Author
+  supremeAuthor: Author
+  name: String! @unique
+  body: Text!
+  lastName: String!
+  statusWord: StatusWord
+  title: String
+  comments: [Comment]
+  alias: Avatar @has_one
+  tag: Tag
+}
+
+type Comment {
+  author: Author
+  blogPost: BlogPost
+  body: String!
+  recievedAt: NaiveDatetime
+  reportedAt: Datetime
+  avatars: [Avatar]
+  finishedAt: Time
+  type: Integer
+  tag: Tag
+}
+
+type Reply {
+  title: String @unique
+  provider: Avatar
+  consumer: Avatar
+  struct: Jsonb
+}
+
+type @opt-out Avatar {
+  imageUrl: String
+  owner: Author
+  sponsors: [Author] @id(value: "sponsor")
+  comment: Comment
+  post: BlogPost
+  providers: [Reply]
+  consumers: [Reply]
+}
+
+type Image {
+  imageUrl: String
+}
+
+type OrderComment {
+  description: Text!
+  information: Jsonb
+}
+
+type PagePost {
+  body: Text!
+  title: String!
+}
+
+type Equipment {
+  name: String @unique
+  description: Text
+}
+
+type Publisher {
+  name: String!
+}
+
+type WillBeDeleted {
+   name: String!
+}
+
+enum StatusWord {
+  APPROVED
+  PENDING
+  DELETED
+}
+
+enum Tag {
+  QUESTION
+  DEPENDENCY # 2. Something
+  NEWS # 1. comment with spaces and numbers
+}
+
+unique PagePost {
+  body_title: [body, title]
+}
+
+constraint Author {
+  lower_session: session > 0
+  upper_session: session < 50.0
+  name_length: name != 'javier'
+}
+
+index BlogPost {
+  title: title
+  description: [body, lastName]
+}
+
+index Author {
+  session: session
+  time: [finishTurn, dateOfBirth, active]
+}

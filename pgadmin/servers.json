@@ -1,0 +1,38 @@
+{
+  "Servers": {
+    "1": {
+        "Name": "Elixir Apps",
+        "Group": "Servers",
+        "Host": "elixir-apps-db",
+        "Port": 5432,
+        "MaintenanceDB": "postgres",
+        "Username": "postgres",
+        "SSLMode": "prefer",
+        "SSLCert": ".postgresql/postgresql.crt",
+        "SSLKey": ".postgresql/postgresql.key",
+        "SSLCompression": 0,
+        "Timeout": 10,
+        "UseSSHTunnel": 0,
+        "TunnelPort": "22",
+        "TunnelAuthentication": 0,
+        "PassFile": "/var/lib/pgadmin/storage/admin_admin.com/pgpass"
+    },
+    "2": {
+        "Name": "Development",
+        "Group": "Servers",
+        "Host": "valiot-app-db",
+        "Port": 5432,
+        "MaintenanceDB": "postgres",
+        "Username": "postgres",
+        "SSLMode": "prefer",
+        "SSLCert": ".postgresql/postgresql.crt",
+        "SSLKey": ".postgresql/postgresql.key",
+        "SSLCompression": 0,
+        "Timeout": 10,
+        "UseSSHTunnel": 0,
+        "TunnelPort": "22",
+        "TunnelAuthentication": 0,
+        "PassFile": "/var/lib/pgadmin/storage/admin_admin.com/pgpass"
+    }
+  }
+}

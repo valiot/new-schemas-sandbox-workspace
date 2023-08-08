@@ -1,0 +1,130 @@
+<section class="phx-hero">
+  <h1><%= gettext "Welcome to %{name}!", name: "Composed Workspace" %></h1>
+  <p>Peace of mind from prototype to production</p>
+</section>
+
+<%=
+  WspaceUI.HTML.Rendering.render_services([
+    row: [
+      column: [
+        group: {"Services", [
+          service: {:ui,      "Valiot UI",  "/"},
+          service: {:exp_627, "Playground", "/playground"}
+        ]},
+        group: {"Workspace", [
+          service: {:pgadmin,        "pgAdmin",              "/browser"},
+          service: {:wspace_ui_doc,  "Documentation",        "/doc/index.html"},
+          service: {:wspace_ui_dash, "Phoenix LiveDasboard", "/dashboard"}
+        ]}
+        # group: {"Valiot App", [
+        #   service: {:valiot_app_graphiql, "GraphiQL console",     "/api/graphiql"},
+        #   service: {:valiot_app_dash,     "Phoenix LiveDasboard", "/dashboard"},
+        #   service: {:valiot_app_cover,    "Coverage report",      "/doc/coverage"},
+        #   service: {:valiot_app_doc,      "Documentation",        "/doc/code"},
+        #   service:
+        #     {:valiot_app_epub, "Documentation Epub", "/doc/Valiot%20App.epub"}
+        # ]}
+      ],
+      column: [
+        group: {"GraphiQL console", [
+          # Graphiql init
+          service: {:alerts_graphiql, "Alerts", "/api/graphiql"},
+          service: {:auth_graphiql, "Auth", "/api/graphiql"},
+          service: {:blog_graphiql, "Blog", "/api/graphiql"},
+          service: {:eliot_graphiql, "Eliot", "/api/graphiql"},
+          service: {:jobs_graphiql, "Jobs", "/api/graphiql"},
+          service: {:notifications_graphiql, "Notifications", "/api/graphiql"},
+          service: {:schedule_logic_graphiql, "Schedule Logic", "/api/graphiql"},
+          service: {:ui_config_graphiql, "Ui Config", "/api/graphiql"},
+          service: {:user_graphiql, "User", "/api/graphiql"}
+        # Graphiql end
+        ]}
+      ],
+      column: [
+        group: {"Phoenix LiveDashboard", [
+          # Dash init
+          service: {:alerts_dash, "Alerts", "/dashboard"},
+          service: {:auth_dash, "Auth", "/dashboard"},
+          service: {:blog_dash, "Blog", "/dashboard"},
+          service: {:eliot_dash, "Eliot", "/dashboard"},
+          service: {:jobs_dash, "Jobs", "/dashboard"},
+          service: {:notifications_dash, "Notifications", "/dashboard"},
+          service: {:schedule_logic_dash, "Schedule Logic", "/dashboard"},
+          service: {:ui_config_dash, "Ui Config", "/dashboard"},
+          service: {:user_dash, "User", "/dashboard"}
+        # Dash end
+        ]}
+      ]
+    ]
+  ])
+%>
+
+<section class="row ">
+  <article class="column">
+    <h3>Deploy generated resourses:</h3>
+    <pre><code><%=
+      """
+      // Super-admin user:
+      // All permissions for all tables in all services.
+      """
+    %><%=
+      WspaceUI.HTML.Rendering.render_setup_resourse(:super_admin)
+    %><%=
+      """
+      
+
+      // Worker:
+      // All permissions for all tables in all services.
+      """
+    %><%=
+      WspaceUI.HTML.Rendering.render_setup_resourse(:worker)
+    %><%=
+      """
+      
+
+      // Elixir Apps token:
+      // All permissions for `permissions` and `tokens` tables in the Auth service.
+      // All permissions for `permissions` and `users` tables in the Users service.
+      // All permissions for `permissions` table in the Alerts, Blog, Eliot, Jobs, Notifications,
+      // Schedule Logic and UI Config services.
+      """
+    %><%=
+      WspaceUI.HTML.Rendering.render_setup_resourse(:apps_token)
+    %></code></pre>
+  </article>
+</section>
+
+<script type="text/javascript">
+
+  document.addEventListener('DOMContentLoaded', (event) => {
+    insert_url_label();
+  });
+
+  function insert_url_label() {
+    const all_service_links = document.getElementsByClassName("service-link");
+    
+    for (let i = 0; i < all_service_links.length; i++) {
+      let port = all_service_links[i].getAttribute("port");
+      let href = all_service_links[i].getAttribute("href");
+      let new_href = generate_link(href, port);
+
+      all_service_links[i].href = new_href;
+      
+      let url_tag = all_service_links[i].nextSibling
+      url_tag.innerHTML = new_href.replace("http://", "");
+    }
+  };
+
+  function generate_link(url, port) {
+    let default_port = "<%= \
+      Application.get_env(:wspace_ui, :services)[:wspace_ui][:host_port] \
+    %>";
+    
+    if (port === null){port = default_port};
+    return window.location.origin.replace(default_port, port).concat(url);
+  };
+  
+  function insertAfter(referenceNode, newNode) {
+    referenceNode.parentNode.insertBefore(newNode, referenceNode.nextSibling);
+  };
+</script>

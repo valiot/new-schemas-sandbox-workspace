@@ -1,0 +1,268 @@
+{
+  "workspace-name": "composed-workspace",
+  "workspace-port": 4010,
+  "ui": {
+    "port": 90,
+    "image": "ghcr.io/valiot/valiot-ui:ui-demo-8961af5"
+  },
+  "worker": {
+    "port": 55432,
+    "image": "ghcr.io/valiot/vcos-test-worker:e0045fc",
+    "environment": {
+      "ENV": "prod",
+      "API": "http://exp-627:$CONTAINER_EXP_627_PORT",
+      "WSS": "ws://exp-627:$CONTAINER_EXP_627_PORT"
+    }
+  },
+  "stitcher": {
+    "port": 8086,
+    "image": "ghcr.io/valiot/exp-627:1.4.0",
+    "extensionsConfig": {
+      "schemaExtensions": [
+        "extend type Device{ resources:[Resource]}",
+        "extend type Resource{ device:Device}",
+        "extend type Unit{ unitOfMeasurements:[UnitOfMeasurement]}",
+        "extend type UnitOfMeasurement{ eliotUnit:Unit}",
+        "extend type VariableState{ eliotVariableStates:[EliotVariableState]}",
+        "extend type EliotVariableState{ variableState:VariableState}",
+        "extend type VariableRange{ eliotVariableRanges:[EliotVariableRange]}",
+        "extend type EliotVariableRange{ variableRange:VariableRange}"
+      ],
+      "resolvers": {
+        "Unit": {
+          "unitOfMeasurements": {
+            "queryName": "unitOfMeasurements",
+            "stitchKind": "oneToMany",
+            "remoteIndexPath": "eliotUnitId",
+            "remoteFieldSchemaKey": "schedule-logic"
+          }
+        },
+        "UnitOfMeasurement": {
+          "eliotUnit": {
+            "queryName": "unit",
+            "parentIndexPath": "eliotUnitId",
+            "remoteFieldSchemaKey": "eliot"
+          }
+        },
+        "VariableState": {
+          "eliotVariableStates": {
+            "queryName": "eliotVariableStates",
+            "stitchKind": "oneToMany",
+            "remoteIndexPath": "variableStateId",
+            "remoteFieldSchemaKey": "schedule-logic"
+          }
+        },
+        "EliotVariableState": {
+          "variableState": {
+            "queryName": "variableState",
+            "parentIndexPath": "variableStateId",
+            "remoteFieldSchemaKey": "eliot"
+          }
+        },
+        "VariableRange": {
+          "eliotVariableRanges": {
+            "queryName": "eliotVariableRanges",
+            "stitchKind": "oneToMany",
+            "remoteIndexPath": "eliotVariableRangeId",
+            "remoteFieldSchemaKey": "schedule-logic"
+          }
+        },
+        "EliotVariableRange": {
+          "variableRange": {
+            "queryName": "variableRange",
+            "parentIndexPath": "variableRangeId",
+            "remoteFieldSchemaKey": "eliot"
+          }
+        },
+        "Device": {
+          "resources": {
+            "queryName": "resources",
+            "stitchKind": "oneToMany",
+            "remoteIndexPath": "deviceId",
+            "remoteFieldSchemaKey": "schedule-logic"
+          }
+        },
+        "Resource": {
+          "device": {
+            "queryName": "device",
+            "parentIndexPath": "deviceId",
+            "remoteFieldSchemaKey": "eliot"
+          }
+        }
+      }
+    },
+    "environment": {
+      "LOG_LEVEL": "info"
+    }
+  },
+  "services": {
+    "alerts": {
+      "port": 4011,
+      "image": "ghcr.io/valiot/alerts:5.0.0",
+      "environment": {
+        "POD_ID": "0000-0001",
+        "DOMAIN": "localhost",
+        "PORT": "$CONTAINER_ELIXIR_APP_PORT",
+        "SECRET_KEY_BASE": "secret",
+        "DATABASE_URL": "ecto://postgres:postgres@elixir-apps-db/alerts",
+        "LOG_LEVEL": "info",
+        "QUEUE_TARGET": 500,
+        "TIMEOUT": 15000,
+        "POOL_SIZE": 2,
+        "LIMIT_QUERY": 1000,
+        "LIMIT_COMPLEXITY": 6999,
+        "STITCH_URL": "http://auth:$CONTAINER_ELIXIR_APP_PORT/api"
+      }
+    },    
+    "auth": {
+      "port": 4012,
+      "image": "ghcr.io/valiot/valiot-auth:3.3.0",
+      "environment": {
+        "POD_ID": "0000-0001",
+        "DOMAIN": "localhost",
+        "PORT": "$CONTAINER_ELIXIR_APP_PORT",
+        "SECRET_KEY_BASE": "secret",
+        "DATABASE_URL": "ecto://postgres:postgres@elixir-apps-db/auth",
+        "FLAME_ON": "true",
+        "LOG_LEVEL": "info",
+        "QUEUE_TARGET": 500,
+        "TIMEOUT": 15000,
+        "POOL_SIZE": 2,
+        "LIMIT_QUERY": 1000,
+        "LIMIT_COMPLEXITY": 6999,
+        "STITCH_URL": "http://auth:$CONTAINER_ELIXIR_APP_PORT/api",
+        "USER_URL": "http://user:$CONTAINER_ELIXIR_APP_PORT/api"
+      }
+    },    
+    "blog": {
+      "port": 4013,
+      "image": "ghcr.io/valiot/blog:2.1.0",
+      "environment": {
+        "POD_ID": "0000-0001",
+        "DOMAIN": "localhost",
+        "PORT": "$CONTAINER_ELIXIR_APP_PORT",
+        "SECRET_KEY_BASE": "secret",
+        "DATABASE_URL": "ecto://postgres:postgres@elixir-apps-db/blog",
+        "LOG_LEVEL": "info",
+        "QUEUE_TARGET": 500,
+        "TIMEOUT": 15000,
+        "POOL_SIZE": 2,
+        "LIMIT_QUERY": 1000,
+        "LIMIT_COMPLEXITY": 6999,
+        "STITCH_URL": "http://auth:$CONTAINER_ELIXIR_APP_PORT/api"
+      }
+    },    
+    "eliot": {
+      "port": 4014,
+      "image": "ghcr.io/valiot/eliot:8.1.0",
+      "environment": {
+        "POD_ID": "0000-0001",
+        "DOMAIN": "localhost",
+        "PORT": "$CONTAINER_ELIXIR_APP_PORT",
+        "SECRET_KEY_BASE": "secret",
+        "DATABASE_URL": "ecto://postgres:postgres@elixir-apps-db/eliot",
+        "LOG_LEVEL": "info",
+        "QUEUE_TARGET": 500,
+        "TIMEOUT": 15000,
+        "POOL_SIZE": 2,
+        "LIMIT_QUERY": 1000,
+        "LIMIT_COMPLEXITY": 6999,
+        "STITCH_URL": "http://auth:$CONTAINER_ELIXIR_APP_PORT/api"
+      }
+    },    
+    "jobs": {
+      "port": 4015,
+      "image": "ghcr.io/valiot/jobs:6.0.0",
+      "environment": {
+        "POD_ID": "0000-0001",
+        "DOMAIN": "localhost",
+        "PORT": "$CONTAINER_ELIXIR_APP_PORT",
+        "SECRET_KEY_BASE": "secret",
+        "DATABASE_URL": "ecto://postgres:postgres@elixir-apps-db/jobs",
+        "LOG_LEVEL": "info",
+        "QUEUE_TARGET": 500,
+        "TIMEOUT": 15000,
+        "POOL_SIZE": 2,
+        "LIMIT_QUERY": 1000,
+        "LIMIT_COMPLEXITY": 6999,
+        "STITCH_URL": "http://auth:$CONTAINER_ELIXIR_APP_PORT/api"
+      }
+    },    
+    "notifications": {
+      "port": 4016,
+      "image": "ghcr.io/valiot/notifications:5.0.0",
+      "environment": {
+        "POD_ID": "0000-0001",
+        "DOMAIN": "localhost",
+        "PORT": "$CONTAINER_ELIXIR_APP_PORT",
+        "SECRET_KEY_BASE": "secret",
+        "DATABASE_URL": "ecto://postgres:postgres@elixir-apps-db/notifications",
+        "LOG_LEVEL": "info",
+        "QUEUE_TARGET": 500,
+        "TIMEOUT": 15000,
+        "POOL_SIZE": 2,
+        "LIMIT_QUERY": 1000,
+        "LIMIT_COMPLEXITY": 6999,
+        "STITCH_URL": "http://auth:$CONTAINER_ELIXIR_APP_PORT/api"
+      }
+    },    
+    "schedule-logic": {
+      "port": 4017,
+      "image": "ghcr.io/valiot/schedule-logic:4.0.0",
+      "environment": {
+        "POD_ID": "0000-0001",
+        "DOMAIN": "localhost",
+        "PORT": "$CONTAINER_ELIXIR_APP_PORT",
+        "SECRET_KEY_BASE": "secret",
+        "DATABASE_URL": "ecto://postgres:postgres@elixir-apps-db/schedule-logic",
+        "LOG_LEVEL": "info",
+        "QUEUE_TARGET": 500,
+        "TIMEOUT": 15000,
+        "POOL_SIZE": 2,
+        "LIMIT_QUERY": 1000,
+        "LIMIT_COMPLEXITY": 6999,
+        "STITCH_URL": "http://auth:$CONTAINER_ELIXIR_APP_PORT/api"
+      }
+    },    
+    "ui-config": {
+      "port": 4018,
+      "image": "ghcr.io/valiot/ui-config:2.0.0",
+      "environment": {
+        "POD_ID": "0000-0001",
+        "DOMAIN": "localhost",
+        "PORT": "$CONTAINER_ELIXIR_APP_PORT",
+        "SECRET_KEY_BASE": "secret",
+        "DATABASE_URL": "ecto://postgres:postgres@elixir-apps-db/ui-config",
+        "LOG_LEVEL": "info",
+        "QUEUE_TARGET": 500,
+        "TIMEOUT": 15000,
+        "POOL_SIZE": 2,
+        "LIMIT_QUERY": 1000,
+        "LIMIT_COMPLEXITY": 6999,
+        "STITCH_URL": "http://auth:$CONTAINER_ELIXIR_APP_PORT/api"
+      }
+    },    
+    "user": {
+      "port": 4019,
+      "image": "ghcr.io/valiot/valiot-user:4.3.0",
+      "environment": {
+        "POD_ID": "0000-0001",
+        "DOMAIN": "localhost",
+        "PORT": "$CONTAINER_ELIXIR_APP_PORT",
+        "SECRET_KEY_BASE": "secret",
+        "DATABASE_URL": "ecto://postgres:postgres@elixir-apps-db/user",
+        "LOG_LEVEL": "info",
+        "QUEUE_TARGET": 500,
+        "TIMEOUT": 15000,
+        "POOL_SIZE": 2,
+        "LIMIT_QUERY": 1000,
+        "LIMIT_COMPLEXITY": 6999,
+        "STITCH_URL": "http://auth:$CONTAINER_ELIXIR_APP_PORT/api",
+        "PASSWORD_RESET_URL": "http://ui:$CONTAINER_UI_PORT/forgot-password/reset"
+      }
+    }
+  },
+  "database":   { "port": 6432 },
+  "pgadmin":    { "port": 5075 },
+  "valiot-app": { "port": 4020 }
+}

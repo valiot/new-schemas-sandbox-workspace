@@ -1,0 +1,471 @@
+version: "3.9"
+services:
+
+  # UI -----------------------------------------------------------------------
+
+  ui:
+    container_name: ui
+    hostname: ui
+    image: $UI_IMAGE
+    ports:
+      - $UI_PORT:$CONTAINER_UI_PORT
+
+  # Worker -------------------------------------------------------------------
+
+  worker:
+    container_name: worker
+    hostname: worker
+    image: $WORKER_IMAGE
+    env_file: 
+      - $WORKER_ENV_FILE
+    ports:
+      - $WORKER_PORT:$CONTAINER_WORKER_PORT
+    environment:
+      ENV: prod
+      API: http://exp-627:$CONTAINER_EXP_627_PORT
+      WSS: ws://exp-627:$CONTAINER_EXP_627_PORT
+    depends_on:
+      exp-627:
+        condition: service_healthy
+    links:
+      - exp-627
+
+  # Stitcher -----------------------------------------------------------------
+
+  exp-627:
+    container_name: exp-627
+    hostname: exp-627
+    build:
+      dockerfile: ./exp-627/Dockerfile
+    ports:
+      - $EXP_627_PORT:$CONTAINER_EXP_627_PORT
+    depends_on:
+      alerts:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+      blog:
+        condition: service_healthy
+      eliot:
+        condition: service_healthy
+      jobs:
+        condition: service_healthy
+      notifications:
+        condition: service_healthy
+      schedule-logic:
+        condition: service_healthy
+      ui-config:
+        condition: service_healthy
+      user:
+        condition: service_healthy
+    healthcheck:
+      test: curl --fail http://localhost:$CONTAINER_EXP_627_PORT/?query=%7B__typename%7D || exit 1
+      timeout: 45s
+      interval: 10s
+      retries: 10
+    links:
+      - ui
+      - alerts
+      - auth
+      - blog
+      - eliot
+      - jobs
+      - notifications
+      - schedule-logic
+      - ui-config
+      - user
+    environment:
+      LOG_LEVEL: info
+      SETTINGS: |
+        {
+          "schemas": [
+            {
+              "link": "http://alerts:$CONTAINER_ELIXIR_APP_PORT/api",
+              "wsLink": "ws://alerts:$CONTAINER_ELIXIR_APP_PORT/socket/websocket?vsn=2.0.0"
+            },
+            {
+              "link": "http://auth:$CONTAINER_ELIXIR_APP_PORT/api",
+              "wslink": ""
+            },
+            {
+              "link": "http://blog:$CONTAINER_ELIXIR_APP_PORT/api",
+              "wsLink": "ws://blog:$CONTAINER_ELIXIR_APP_PORT/socket/websocket?vsn=2.0.0"
+            },
+            {
+              "link": "http://eliot:$CONTAINER_ELIXIR_APP_PORT/api",
+              "wsLink": "ws://eliot:$CONTAINER_ELIXIR_APP_PORT/socket/websocket?vsn=2.0.0"
+            },
+            {
+              "link": "http://jobs:$CONTAINER_ELIXIR_APP_PORT/api",
+              "wsLink": "ws://jobs:$CONTAINER_ELIXIR_APP_PORT/socket/websocket?vsn=2.0.0"
+            },
+            {
+              "link": "http://notifications:$CONTAINER_ELIXIR_APP_PORT/api",
+              "wsLink": "ws://notifications:$CONTAINER_ELIXIR_APP_PORT/socket/websocket?vsn=2.0.0"
+            },
+            {
+              "link": "http://schedule-logic:$CONTAINER_ELIXIR_APP_PORT/api",
+              "wsLink": "ws://schedule-logic:$CONTAINER_ELIXIR_APP_PORT/socket/websocket?vsn=2.0.0"
+            },
+            {
+              "link": "http://ui-config:$CONTAINER_ELIXIR_APP_PORT/api",
+              "wsLink": "ws://ui-config:$CONTAINER_ELIXIR_APP_PORT/socket/websocket?vsn=2.0.0"
+            },
+            {
+              "link": "http://user:$CONTAINER_ELIXIR_APP_PORT/api",
+              "wsLink": "ws://user:$CONTAINER_ELIXIR_APP_PORT/socket/websocket?vsn=2.0.0"
+            }
+          ],
+          "extensionsConfig": {"schemaExtensions":["extend type Device{ resources:[Resource]}","extend type Resource{ device:Device}","extend type Unit{ unitOfMeasurements:[UnitOfMeasurement]}","extend type UnitOfMeasurement{ eliotUnit:Unit}","extend type VariableState{ eliotVariableStates:[EliotVariableState]}","extend type EliotVariableState{ variableState:VariableState}","extend type VariableRange{ eliotVariableRanges:[EliotVariableRange]}","extend type EliotVariableRange{ variableRange:VariableRange}"],"resolvers":{"Unit":{"unitOfMeasurements":{"queryName":"unitOfMeasurements","stitchKind":"oneToMany","remoteIndexPath":"eliotUnitId","remoteFieldSchemaKey":"schedule-logic"}},"UnitOfMeasurement":{"eliotUnit":{"queryName":"unit","parentIndexPath":"eliotUnitId","remoteFieldSchemaKey":"eliot"}},"VariableState":{"eliotVariableStates":{"queryName":"eliotVariableStates","stitchKind":"oneToMany","remoteIndexPath":"variableStateId","remoteFieldSchemaKey":"schedule-logic"}},"EliotVariableState":{"variableState":{"queryName":"variableState","parentIndexPath":"variableStateId","remoteFieldSchemaKey":"eliot"}},"VariableRange":{"eliotVariableRanges":{"queryName":"eliotVariableRanges","stitchKind":"oneToMany","remoteIndexPath":"eliotVariableRangeId","remoteFieldSchemaKey":"schedule-logic"}},"EliotVariableRange":{"variableRange":{"queryName":"variableRange","parentIndexPath":"variableRangeId","remoteFieldSchemaKey":"eliot"}},"Device":{"resources":{"queryName":"resources","stitchKind":"oneToMany","remoteIndexPath":"deviceId","remoteFieldSchemaKey":"schedule-logic"}},"Resource":{"device":{"queryName":"device","parentIndexPath":"deviceId","remoteFieldSchemaKey":"eliot"}}}}
+        }
+
+  # Elixir Apps database -----------------------------------------------------
+
+  elixir-apps-db:
+    container_name: elixir-apps-db
+    hostname: elixir-apps-db
+    build:
+      context: .
+      dockerfile: ./valiot-app-db/Dockerfile
+    ports:
+      - $DATABASE_PORT:5432
+    restart: always
+    environment: 
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+    healthcheck:
+      test: pg_isready -q -d postgres -U postgres
+      timeout: 45s
+      interval: 10s
+      retries: 10
+
+  # Elixir Apps --------------------------------------------------------------
+
+  alerts: 
+    container_name: alerts 
+    hostname: alerts 
+    build: 
+      dockerfile: ./elixir-apps/alerts.Dockerfile 
+    platform: $PLATFORM 
+    env_file: 
+      - $ELIXIR_APP_ENV_FILE 
+    ports: 
+      - 4011:$CONTAINER_ELIXIR_APP_PORT 
+    environment: 
+      POD_ID: 0000-0001
+      DOMAIN: localhost
+      PORT: $CONTAINER_ELIXIR_APP_PORT
+      SECRET_KEY_BASE: secret
+      DATABASE_URL: ecto://postgres:postgres@elixir-apps-db/alerts
+      LOG_LEVEL: info
+      QUEUE_TARGET: 500
+      TIMEOUT: 15000
+      POOL_SIZE: 2
+      LIMIT_QUERY: 1000
+      LIMIT_COMPLEXITY: 6999
+      STITCH_URL: http://auth:$CONTAINER_ELIXIR_APP_PORT/api 
+    healthcheck: 
+      test: curl --fail http://localhost:$CONTAINER_ELIXIR_APP_PORT/api/graphiql?query=. || exit 1 
+      timeout: 45s 
+      interval: 10s 
+      retries: 10 
+    depends_on: 
+      elixir-apps-db:
+        condition: service_healthy 
+    links: 
+      - elixir-apps-db 
+    volumes: 
+      - ./$SETUP_PROPERTIES_FILE:/$SETUP_PROPERTIES_FILE
+
+  auth: 
+    container_name: auth 
+    hostname: auth 
+    build: 
+      dockerfile: ./elixir-apps/auth.Dockerfile 
+    platform: $PLATFORM 
+    env_file: 
+      - $ELIXIR_APP_ENV_FILE 
+    ports: 
+      - 4012:$CONTAINER_ELIXIR_APP_PORT 
+    environment: 
+      POD_ID: 0000-0001
+      DOMAIN: localhost
+      PORT: $CONTAINER_ELIXIR_APP_PORT
+      SECRET_KEY_BASE: secret
+      DATABASE_URL: ecto://postgres:postgres@elixir-apps-db/auth
+      FLAME_ON: true
+      LOG_LEVEL: info
+      QUEUE_TARGET: 500
+      TIMEOUT: 15000
+      POOL_SIZE: 2
+      LIMIT_QUERY: 1000
+      LIMIT_COMPLEXITY: 6999
+      STITCH_URL: http://auth:$CONTAINER_ELIXIR_APP_PORT/api
+      USER_URL: http://user:$CONTAINER_ELIXIR_APP_PORT/api 
+    healthcheck: 
+      test: curl --fail http://localhost:$CONTAINER_ELIXIR_APP_PORT/api/graphiql?query=. || exit 1 
+      timeout: 45s 
+      interval: 10s 
+      retries: 10 
+    depends_on: 
+      elixir-apps-db:
+        condition: service_healthy 
+    links: 
+      - elixir-apps-db 
+    volumes: 
+      - ./$SETUP_PROPERTIES_FILE:/$SETUP_PROPERTIES_FILE
+
+  blog: 
+    container_name: blog 
+    hostname: blog 
+    build: 
+      dockerfile: ./elixir-apps/blog.Dockerfile 
+    platform: $PLATFORM 
+    env_file: 
+      - $ELIXIR_APP_ENV_FILE 
+    ports: 
+      - 4013:$CONTAINER_ELIXIR_APP_PORT 
+    environment: 
+      POD_ID: 0000-0001
+      DOMAIN: localhost
+      PORT: $CONTAINER_ELIXIR_APP_PORT
+      SECRET_KEY_BASE: secret
+      DATABASE_URL: ecto://postgres:postgres@elixir-apps-db/blog
+      LOG_LEVEL: info
+      QUEUE_TARGET: 500
+      TIMEOUT: 15000
+      POOL_SIZE: 2
+      LIMIT_QUERY: 1000
+      LIMIT_COMPLEXITY: 6999
+      STITCH_URL: http://auth:$CONTAINER_ELIXIR_APP_PORT/api 
+    healthcheck: 
+      test: curl --fail http://localhost:$CONTAINER_ELIXIR_APP_PORT/api/graphiql?query=. || exit 1 
+      timeout: 45s 
+      interval: 10s 
+      retries: 10 
+    depends_on: 
+      elixir-apps-db:
+        condition: service_healthy 
+    links: 
+      - elixir-apps-db 
+    volumes: 
+      - ./$SETUP_PROPERTIES_FILE:/$SETUP_PROPERTIES_FILE
+
+  eliot: 
+    container_name: eliot 
+    hostname: eliot 
+    build: 
+      dockerfile: ./elixir-apps/eliot.Dockerfile 
+    platform: $PLATFORM 
+    env_file: 
+      - $ELIXIR_APP_ENV_FILE 
+    ports: 
+      - 4014:$CONTAINER_ELIXIR_APP_PORT 
+    environment: 
+      POD_ID: 0000-0001
+      DOMAIN: localhost
+      PORT: $CONTAINER_ELIXIR_APP_PORT
+      SECRET_KEY_BASE: secret
+      DATABASE_URL: ecto://postgres:postgres@elixir-apps-db/eliot
+      LOG_LEVEL: info
+      QUEUE_TARGET: 500
+      TIMEOUT: 15000
+      POOL_SIZE: 2
+      LIMIT_QUERY: 1000
+      LIMIT_COMPLEXITY: 6999
+      STITCH_URL: http://auth:$CONTAINER_ELIXIR_APP_PORT/api 
+    healthcheck: 
+      test: curl --fail http://localhost:$CONTAINER_ELIXIR_APP_PORT/api/graphiql?query=. || exit 1 
+      timeout: 45s 
+      interval: 10s 
+      retries: 10 
+    depends_on: 
+      elixir-apps-db:
+        condition: service_healthy 
+    links: 
+      - elixir-apps-db 
+    volumes: 
+      - ./$SETUP_PROPERTIES_FILE:/$SETUP_PROPERTIES_FILE
+
+  jobs: 
+    container_name: jobs 
+    hostname: jobs 
+    build: 
+      dockerfile: ./elixir-apps/jobs.Dockerfile 
+    platform: $PLATFORM 
+    env_file: 
+      - $ELIXIR_APP_ENV_FILE 
+    ports: 
+      - 4015:$CONTAINER_ELIXIR_APP_PORT 
+    environment: 
+      POD_ID: 0000-0001
+      DOMAIN: localhost
+      PORT: $CONTAINER_ELIXIR_APP_PORT
+      SECRET_KEY_BASE: secret
+      DATABASE_URL: ecto://postgres:postgres@elixir-apps-db/jobs
+      LOG_LEVEL: info
+      QUEUE_TARGET: 500
+      TIMEOUT: 15000
+      POOL_SIZE: 2
+      LIMIT_QUERY: 1000
+      LIMIT_COMPLEXITY: 6999
+      STITCH_URL: http://auth:$CONTAINER_ELIXIR_APP_PORT/api 
+    healthcheck: 
+      test: curl --fail http://localhost:$CONTAINER_ELIXIR_APP_PORT/api/graphiql?query=. || exit 1 
+      timeout: 45s 
+      interval: 10s 
+      retries: 10 
+    depends_on: 
+      elixir-apps-db:
+        condition: service_healthy 
+    links: 
+      - elixir-apps-db 
+    volumes: 
+      - ./$SETUP_PROPERTIES_FILE:/$SETUP_PROPERTIES_FILE
+
+  notifications: 
+    container_name: notifications 
+    hostname: notifications 
+    build: 
+      dockerfile: ./elixir-apps/notifications.Dockerfile 
+    platform: $PLATFORM 
+    env_file: 
+      - $ELIXIR_APP_ENV_FILE 
+    ports: 
+      - 4016:$CONTAINER_ELIXIR_APP_PORT 
+    environment: 
+      POD_ID: 0000-0001
+      DOMAIN: localhost
+      PORT: $CONTAINER_ELIXIR_APP_PORT
+      SECRET_KEY_BASE: secret
+      DATABASE_URL: ecto://postgres:postgres@elixir-apps-db/notifications
+      LOG_LEVEL: info
+      QUEUE_TARGET: 500
+      TIMEOUT: 15000
+      POOL_SIZE: 2
+      LIMIT_QUERY: 1000
+      LIMIT_COMPLEXITY: 6999
+      STITCH_URL: http://auth:$CONTAINER_ELIXIR_APP_PORT/api 
+    healthcheck: 
+      test: curl --fail http://localhost:$CONTAINER_ELIXIR_APP_PORT/api/graphiql?query=. || exit 1 
+      timeout: 45s 
+      interval: 10s 
+      retries: 10 
+    depends_on: 
+      elixir-apps-db:
+        condition: service_healthy 
+    links: 
+      - elixir-apps-db 
+    volumes: 
+      - ./$SETUP_PROPERTIES_FILE:/$SETUP_PROPERTIES_FILE
+
+  schedule-logic: 
+    container_name: schedule-logic 
+    hostname: schedule-logic 
+    build: 
+      dockerfile: ./elixir-apps/schedule-logic.Dockerfile 
+    platform: $PLATFORM 
+    env_file: 
+      - $ELIXIR_APP_ENV_FILE 
+    ports: 
+      - 4017:$CONTAINER_ELIXIR_APP_PORT 
+    environment: 
+      POD_ID: 0000-0001
+      DOMAIN: localhost
+      PORT: $CONTAINER_ELIXIR_APP_PORT
+      SECRET_KEY_BASE: secret
+      DATABASE_URL: ecto://postgres:postgres@elixir-apps-db/schedule-logic
+      LOG_LEVEL: info
+      QUEUE_TARGET: 500
+      TIMEOUT: 15000
+      POOL_SIZE: 2
+      LIMIT_QUERY: 1000
+      LIMIT_COMPLEXITY: 6999
+      STITCH_URL: http://auth:$CONTAINER_ELIXIR_APP_PORT/api 
+    healthcheck: 
+      test: curl --fail http://localhost:$CONTAINER_ELIXIR_APP_PORT/api/graphiql?query=. || exit 1 
+      timeout: 45s 
+      interval: 10s 
+      retries: 10 
+    depends_on: 
+      elixir-apps-db:
+        condition: service_healthy 
+    links: 
+      - elixir-apps-db 
+    volumes: 
+      - ./$SETUP_PROPERTIES_FILE:/$SETUP_PROPERTIES_FILE
+
+  ui-config: 
+    container_name: ui-config 
+    hostname: ui-config 
+    build: 
+      dockerfile: ./elixir-apps/ui-config.Dockerfile 
+    platform: $PLATFORM 
+    env_file: 
+      - $ELIXIR_APP_ENV_FILE 
+    ports: 
+      - 4018:$CONTAINER_ELIXIR_APP_PORT 
+    environment: 
+      POD_ID: 0000-0001
+      DOMAIN: localhost
+      PORT: $CONTAINER_ELIXIR_APP_PORT
+      SECRET_KEY_BASE: secret
+      DATABASE_URL: ecto://postgres:postgres@elixir-apps-db/ui-config
+      LOG_LEVEL: info
+      QUEUE_TARGET: 500
+      TIMEOUT: 15000
+      POOL_SIZE: 2
+      LIMIT_QUERY: 1000
+      LIMIT_COMPLEXITY: 6999
+      STITCH_URL: http://auth:$CONTAINER_ELIXIR_APP_PORT/api 
+    healthcheck: 
+      test: curl --fail http://localhost:$CONTAINER_ELIXIR_APP_PORT/api/graphiql?query=. || exit 1 
+      timeout: 45s 
+      interval: 10s 
+      retries: 10 
+    depends_on: 
+      elixir-apps-db:
+        condition: service_healthy 
+    links: 
+      - elixir-apps-db 
+    volumes: 
+      - ./$SETUP_PROPERTIES_FILE:/$SETUP_PROPERTIES_FILE
+
+  user: 
+    container_name: user 
+    hostname: user 
+    build: 
+      dockerfile: ./elixir-apps/user.Dockerfile 
+    platform: $PLATFORM 
+    env_file: 
+      - $ELIXIR_APP_ENV_FILE 
+    ports: 
+      - 4019:$CONTAINER_ELIXIR_APP_PORT 
+    environment: 
+      POD_ID: 0000-0001
+      DOMAIN: localhost
+      PORT: $CONTAINER_ELIXIR_APP_PORT
+      SECRET_KEY_BASE: secret
+      DATABASE_URL: ecto://postgres:postgres@elixir-apps-db/user
+      LOG_LEVEL: info
+      QUEUE_TARGET: 500
+      TIMEOUT: 15000
+      POOL_SIZE: 2
+      LIMIT_QUERY: 1000
+      LIMIT_COMPLEXITY: 6999
+      STITCH_URL: http://auth:$CONTAINER_ELIXIR_APP_PORT/api
+      PASSWORD_RESET_URL: http://ui:$CONTAINER_UI_PORT/forgot-password/reset 
+    healthcheck: 
+      test: curl --fail http://localhost:$CONTAINER_ELIXIR_APP_PORT/api/graphiql?query=. || exit 1 
+      timeout: 45s 
+      interval: 10s 
+      retries: 10 
+    depends_on: 
+      auth:
+        condition: service_healthy
+      elixir-apps-db:
+        condition: service_healthy 
+    links: 
+      - elixir-apps-db 
+    volumes: 
+      - ./$SETUP_PROPERTIES_FILE:/$SETUP_PROPERTIES_FILE

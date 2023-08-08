@@ -1,0 +1,5 @@
+.vscode
+setup.properties
+**.env
+elixir-apps/*.Dockerfile
+exp-627/Dockerfile

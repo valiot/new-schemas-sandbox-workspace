@@ -1,0 +1,226 @@
+# v1.0.0
+# (for test purposes) Foundation App - valiot-app
+
+type @public Author {
+  name: String! @unique #comment
+  externalDb: ID #comment2
+  lastName: String! @unique
+  finishTurn: Time
+  dateOfBirth: Date
+  active: Boolean @default(value: false)
+  blogPosts: [BlogPost]
+  comments: [Comment] #comment2
+  avatar: Avatar @has_one @id(value: "owner")
+  sponsor: Avatar
+  categories: [Category]
+  publishers: [Publisher] @id(value: "createdBy")
+  session: Float
+  email: String
+  wordCounts: [WordCount]
+}
+
+type PagePost {
+  body: Text!
+  title: String!
+  categories: [Category] @hasManyThrough(value: "PagePostCategory")
+  pagePostCategories: [PagePostCategory] # Optional attribute
+}
+
+type BlogPost {
+  author: Author
+  name: String! @unique
+  body: Text!
+  title: String
+  lastName: String @default(value: "guerra")
+  dateOfPublication: Date
+  statusWord: StatusWord @default(value: "APPROVED")
+  comments: [Comment]
+  approvedAt: Datetime
+  alias: Avatar @has_one @id(value: "post")
+  tag: Tag
+  votes: Integer
+  topics: [Category] @hasManyThrough(value: "BlogPostCategory") @id(value: "blogTheme")
+  blogPostCategories: [BlogPostCategory] @id(value: "post") # Optional attribute
+}
+
+type Comment {
+  author: Author
+  supremeAuthor: Author
+  orderComment: OrderComment
+  blogPost: BlogPost
+  body: String!
+  recievedAt: Datetime
+  reportedAt: Datetime
+  avatar: Avatar
+  styles: [Style]
+  finishedAt: Integer
+  type: Integer
+  tag: Tag
+  statusWord: StatusWord @default(value: "APPROVED")
+  votes: Integer
+  commonVowels: String
+}
+
+type Reply {
+  title: String @unique
+  provider: Avatar
+  consumer: Avatar
+  struct: Jsonb
+  metadata: Jsonb
+}
+
+type @opt-out Avatar {
+  imageUrl: String @unique
+  avatarConfigurations: [AvatarConfiguration]
+  comments: [Comment]
+  owner: Author
+  sponsors: [Author] @id(value: "sponsor")
+  post: BlogPost
+  providers: [Reply] @id(value: "provider")
+  consumers: [Reply] @id(value: "consumer")
+  style: Style @hasOne
+}
+
+type OrderComment {
+  vanity: [Comment] @id(value: "OrderComment")
+  description: Text!
+}
+
+type Style {
+  description: Text!
+  comment: Comment @default(value: 1)
+  avatar: Avatar
+}
+
+type AvatarConfiguration {
+  guid: String! @unique
+  config: Avatar
+  version: String
+}
+
+type WordCount {
+  author: Author!
+  outputBlogPost: BlogPost
+  count: Integer
+}
+
+type Category {
+  name: String! @unique
+  description: String
+  createdBy: Author
+  editedBy: Author
+  posts: [BlogPost] @hasManyThrough(value: "BlogPostCategory")
+  pagePosts: [PagePost] @hasManyThrough(value: "PagePostCategory")
+  centralPublisher: Publisher
+}
+
+type PagePostCategory {
+  category: Category
+  pagePost: PagePost
+}
+
+type BlogPostCategory {
+  blogTheme: Category
+  post: BlogPost
+  relevanceLevel: Integer
+}
+
+type Employee {
+  name: String
+  email: String @unique
+  department: String
+  employer: Employee
+  employees: [Employee] @id(value: "employer")
+  boss: Employee
+  workers: [Employee] @id(value: "boss")
+  daysOff: Integer
+}
+
+type Equipment {
+  name: String @unique
+  description: Text
+  information: Jsonb
+  previousEquipments: [EquipmentArc] @id(value: "next")
+  nextEquipments: [EquipmentArc] @id(value: "self")
+}
+
+type EquipmentArc {
+  self: Equipment
+  next: Equipment
+}
+
+type Publisher {
+  description: String
+  createdBy: Author
+  name: String
+  category: Category @hasOne @id(value: "centralPublisher")
+}
+
+# This type has no relation attributes.
+# It only has scalar attributes.
+# Leave it that way for test purposes.
+type Card {
+  number: Integer
+  expirationDate: Date
+}
+
+enum StatusWord {
+  APPROVED
+  PENDING
+  REJECTED
+}
+
+enum Tag {
+  QUESTION
+  DEPENDENCY # 2. Something
+  NEWS # 1. comment with spaces and numbers
+}
+
+unique PagePost {
+  body_title: [body, title]
+}
+
+unique Category {
+  author_description: [createdById, description]
+}
+
+unique Publisher {
+  author_name: [name, createdById]
+}
+
+constraint Author {
+  lower_session: session > 0
+  upper_session: session < 80.0
+}
+
+constraint BlogPost {
+  title_equals: title = 'prueba'
+}
+
+constraint Employee {
+  email_format: email ~ '[^@]+@[^\.]+\..+'
+}
+
+index Author {
+  email: email
+  time: [finishTurn, dateOfBirth]
+}
+
+index Comment {
+  type: type
+  date: [recievedAt, reportedAt]
+}
+
+index Category {
+  description: description
+}
+
+interface SearchResult {
+  author: Author
+  blogPost: BlogPost
+}
+
+interface Newest {
+  author: Author
+  blogPost: BlogPost
+}

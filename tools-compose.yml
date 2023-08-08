@@ -1,0 +1,63 @@
+version: "3.9"
+services:
+  wspace-ui:
+    container_name: wspace-ui
+    build:
+      dockerfile: ./wspace-ui/Dockerfile
+    env_file: 
+      - $SETUP_PROPERTIES_FILE
+    ports: 
+      - $WSPACE_UI_PORT:$CONTAINER_ELIXIR_APP_PORT
+    environment:
+      WORKSPACE: true
+      PHX_HOST: localhost
+      PORT: $CONTAINER_ELIXIR_APP_PORT
+      SECRET_KEY_BASE: xGQJFhc0ruNExeT1XhlmjsLduOa0rRC5kncpX/Gf8Ciw7roQOhw491/YWm7eBN/1
+      TASK_TIMEOUT: 600
+      HTTP_TIMEOUT: 500
+      HTTP_RECV_TIMEOUT: 400
+      # Services ports
+      WSPACE_UI_PORT: $WSPACE_UI_PORT
+      EXP_627_PORT: $EXP_627_PORT
+      UI_PORT: $UI_PORT
+      WORKER_PORT: $WORKER_PORT      
+      PGADMIN_PORT: $PGADMIN_PORT
+      VALIOT_APP_PORT: $VALIOT_APP_PORT
+      CONTAINER_ELIXIR_APP_PORT: $CONTAINER_ELIXIR_APP_PORT
+      CONTAINER_UI_PORT: $CONTAINER_UI_PORT
+      CONTAINER_EXP_627_PORT: $CONTAINER_EXP_627_PORT
+      CONTAINER_WORKER_PORT: $CONTAINER_WORKER_PORT
+      # Valiot-App services ports
+      ALERTS_PORT: $ALERTS_PORT
+      AUTH_PORT: $AUTH_PORT
+      BLOG_PORT: $BLOG_PORT
+      ELIOT_PORT: $ELIOT_PORT
+      JOBS_PORT: $JOBS_PORT
+      NOTIFICATIONS_PORT: $NOTIFICATIONS_PORT
+      SCHEDULE_LOGIC_PORT: $SCHEDULE_LOGIC_PORT
+      UI_CONFIG_PORT: $UI_CONFIG_PORT
+      USER_PORT: $USER_PORT
+      # End of Valiot-App services ports
+
+  pgadmin:
+    container_name: pg_admin
+    image: dpage/pgadmin4:latest
+    entrypoint: >
+      /bin/sh -c "
+      mkdir -m 700 -p /var/lib/pgadmin/storage/admin_admin.com;
+      chown -R pgadmin /var/lib/pgadmin/storage/admin_admin.com;
+      cp /pgadmin4/pgpass /var/lib/pgadmin/storage/admin_admin.com;
+      chmod 600 /var/lib/pgadmin/storage/admin_admin.com/pgpass;
+      /entrypoint.sh
+      "
+    ports: 
+      - $PGADMIN_PORT:80
+    restart: always
+    environment: 
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: root
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False'
+    volumes:
+      - ./pgadmin/servers.json:/pgadmin4/servers.json
+      - ./pgadmin/pgpass:/pgadmin4/pgpass

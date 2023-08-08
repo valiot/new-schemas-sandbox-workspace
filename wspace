@@ -1,0 +1,915 @@
+#!/bin/bash
+# v1.5.0
+#
+# ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+# ┃ Composed Workspace management script ┃ 
+# ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+#
+# CONFIGURATION ----------------------------------------------------------------
+
+  # If echo handles -e option, overrides the command
+  if [ "$(echo -e)" == "" ]; then echo() { command echo -e "$@"; } fi
+  
+  # Color codes: 1=red, 8=light_gray
+  export C1="\x1B[38;5;1m"
+  export C8="\x1B[38;5;8m"
+  # V: Variables, A: Arrays, B: Bold, R: Reset
+  export V="\x1B[38;5;4m" A="\x1B[38;5;3m" B="\x1B[1m" R="\x1B[0m"
+
+  # Check for jq command availability
+  if ! command -v jq &> /dev/null; then
+    echo "${C1}${B}Error:${R} jq is not installed. Please, install it to continue."
+    exit 1
+  fi
+
+  # Container internal network ports.
+  export CONTAINER_UI_PORT=80
+  export CONTAINER_EXP_627_PORT=8080
+  export CONTAINER_WORKER_PORT=65432
+  # Container internal network port for valiot-app, elixir apps & wspace-ui.
+  export CONTAINER_ELIXIR_APP_PORT=4000
+  # Workspace JSON configuration file
+  export CONFIG_FILE="wspace-config.json"
+  export SYSTEM_COMPOSE_FILE="workspace-compose.yml"
+  export VALIOT_APP_COMPOSE_FILE="valiot-app-compose.yml"
+  export TOOLS_COMPOSE_FILE="tools-compose.yml"
+  # Docker Compose project name
+  export COMPOSE_PROJECT_NAME=$( jq -r '.["workspace-name"]' $CONFIG_FILE )
+  # Ports to be used in the local machine to get access to the services.
+  # These are used by tools-compose.yml script.
+  export WSPACE_UI_PORT=$( jq -r '.["workspace-port"]' $CONFIG_FILE )
+  export PGADMIN_PORT=$( jq -r '.pgadmin.port' $CONFIG_FILE )
+  # These are used by workspace-compose.yml script.
+  export UI_PORT=$( jq -r '.ui.port' $CONFIG_FILE )
+  export WORKER_PORT=$( jq -r '.worker.port' $CONFIG_FILE )
+  export EXP_627_PORT=$( jq -r '.stitcher.port' $CONFIG_FILE )
+  export DATABASE_PORT=$( jq -r '.database.port' $CONFIG_FILE )
+  # These are used by valiot-compose.yml script.
+  export VALIOT_APP_PORT=$( jq -r '.["valiot-app"].port' $CONFIG_FILE )
+  # UI, Worker & Stitcher docker images
+  export UI_IMAGE=$( jq -r '.ui.image' $CONFIG_FILE )
+  export WORKER_IMAGE=$( jq -r '.worker.image' $CONFIG_FILE )
+  export EXP_627_IMAGE=$( jq -r '.stitcher.image' $CONFIG_FILE )
+  # Elixir Apps Services
+  export SERVICES=$(jq -r '.services | keys[]' $CONFIG_FILE)
+  # When is set to true all container run commands will be outputted.
+  export VERBOSE=true
+  # Disables orphan containers warnings and scan suggest.
+  export COMPOSE_IGNORE_ORPHANS=1
+  export DOCKER_SCAN_SUGGEST=false
+  # Stores the version specified in the 2nd line of this very file.
+  export SCRIPT_VERSION=$(cat $0 | head -2 | tail -1 | sed "s/# v//g")
+  # Docker compose scripts
+  export SYSTEM_COMPOSE=" -f $SYSTEM_COMPOSE_FILE"
+  export VALIOT_APP_COMPOSE=" -f $VALIOT_APP_COMPOSE_FILE"
+  export TOOLS_COMPOSE=" -f $TOOLS_COMPOSE_FILE"
+  export COMPOSE="$SYSTEM_COMPOSE $TOOLS_COMPOSE"
+  export ALL_COMPOSE="$VALIOT_APP_COMPOSE $SYSTEM_COMPOSE $TOOLS_COMPOSE"
+  # Enviroment variables files
+  export SETUP_PROPERTIES_FILE="setup.properties"
+  export EXP_627_DIR="./exp-627/"
+  export WORKER_DIR="./worker/"
+  export WORKER_ENV_FILE="$WORKER_DIR/.env"
+  export ELIXIR_APP_ENV_FILE="./elixir-apps/.env"
+  export VALIOT_APP_DOC_DIR="./valiot-app/doc/"
+  export VALIOT_APP_COVER_DIR="./valiot-app/cover/"
+  # Path pointing to the initialization script inside a elixir-app or 
+  # valiot-app container.
+  export RUN_FILE="./run.sh"
+  # Sets the target platform version on the image to download, is used for the
+  # elixir apps who have both versions: linux/arm64 and linux/amd64
+  export PLATFORM=$(
+    ARCH=$(arch)
+    # Handles architecture for ARM 64-bit for M1 chips and RaspberryPi 4
+    if [ $ARCH == "arm64" ] || [ $ARCH == "aarch64" ]; then echo "linux/arm64";
+    else echo "linux/amd64"; fi
+  )
+
+  # ----------------------------------------------------------------------------
+
+  # Set the worker enviroment variables
+  ENV_VARS=$(
+    jq -r \
+    '.worker.environment | to_entries[] | "\(.key):\(.value)"' \
+    $CONFIG_FILE
+  ) \
+  && WORKER_ENV_VARS="" \
+  && for ENV_VAR in $ENV_VARS; do
+    WORKER_ENV_VARS+="\n      ${ENV_VAR/:/: }"
+  done \
+  && WORKER_ENV_VARS+="\n    depends_on:" \
+  && sed '/hostname: worker/,/depends_on:/ {
+    /environment:/ {
+      n
+      : loop
+      /depends_on:/!{
+        N
+        b loop
+      }
+      c\
+  '"${WORKER_ENV_VARS:4}"'
+    }
+  }' $SYSTEM_COMPOSE_FILE > .tmp \
+  && mv .tmp $SYSTEM_COMPOSE_FILE
+  
+  # Set the stitcher enviroment variables
+  ENV_VARS=$(
+    jq -r \
+    '.stitcher.environment | to_entries[] | "\(.key):\(.value)"' \
+    $CONFIG_FILE
+  ) \
+  && EXP_627_ENV_VARS="" \
+  && for ENV_VAR in $ENV_VARS; do
+    EXP_627_ENV_VARS+="\n      ${ENV_VAR/:/: }"
+  done
+  # Set the stitcher schema urls
+  EXP_627_SCHEMA_URLS="\"schemas\": [" \
+  && for SERVICE in $SERVICES; do
+    EXP_627_SCHEMA_URLS+="\n            {" \
+    && EXP_627_SCHEMA_URLS+="\n              \"link\": \"http://$SERVICE:\$CONTAINER_ELIXIR_APP_PORT/api\"," \
+    && if [ "$SERVICE" != "auth" ]; then
+      EXP_627_SCHEMA_URLS+="\n              \"wsLink\": \"ws://$SERVICE:\$CONTAINER_ELIXIR_APP_PORT/socket/websocket?vsn=2.0.0\""
+    else
+      EXP_627_SCHEMA_URLS+="\n              \"wslink\": \"\""
+    fi \
+    && EXP_627_SCHEMA_URLS+="\n            },"
+  done \
+  && EXP_627_SCHEMA_URLS=${EXP_627_SCHEMA_URLS::-1} \
+  && EXP_627_SCHEMA_URLS+="\n          ],"
+  # Set the stitcher extensionConfig enviroment variable
+  EXP_627_EXT_CONFIG=$( jq -r '.stitcher.extensionsConfig | tostring' $CONFIG_FILE) \
+  && EXP_627_EXT_CONFIG=$(echo "$EXP_627_EXT_CONFIG" | sed '2,$s/^/          /') \
+  && EXP_627_ENV_VARS=${EXP_627_ENV_VARS:4} \
+  && EXP_627_ENV_VARS+="\n      SETTINGS: |" \
+  && EXP_627_ENV_VARS+="\n        {" \
+  && EXP_627_ENV_VARS+="\n          $EXP_627_SCHEMA_URLS" \
+  && EXP_627_ENV_VARS+="\n          \"extensionsConfig\": $EXP_627_EXT_CONFIG" \
+  && EXP_627_ENV_VARS+="\n        }\n\n  # Elixir Apps database -------------" \
+  && EXP_627_ENV_VARS+="----------------------------------------" \
+  && sed '/hostname: exp-627/,/# Elixir Apps database/ {
+    /environment:/ {
+      n
+      : loop
+      /# Elixir Apps database/!{
+        N
+        b loop
+      }
+      c\
+  '"${EXP_627_ENV_VARS}"'
+    }
+  }' $SYSTEM_COMPOSE_FILE > .tmp \
+  && mv .tmp $SYSTEM_COMPOSE_FILE
+  # Set the stitcher dependencies in workspace-compose.yml
+  EXP_627_DEPENDS_ON="" \
+  && for SERVICE in $SERVICES; do
+    EXP_627_DEPENDS_ON+="\n      $SERVICE:" \
+    && EXP_627_DEPENDS_ON+="\n        condition: service_healthy"
+  done \
+  && EXP_627_DEPENDS_ON+="\n    healthcheck:" \
+  && sed '/hostname: exp-627/,/healthcheck:/ {
+    /depends_on:/ {
+      n
+      : loop
+      /healthcheck:/!{
+        N
+        b loop
+      }
+      c\
+  '"${EXP_627_DEPENDS_ON:4}"'
+    }
+  }' $SYSTEM_COMPOSE_FILE > .tmp \
+  && mv .tmp $SYSTEM_COMPOSE_FILE
+  # Set the stitcher links in workspace-compose.yml
+  EXP_627_LINKS="    - ui" \
+  && for SERVICE in $SERVICES; do
+    EXP_627_LINKS+="\n      - $SERVICE"
+  done \
+  && EXP_627_LINKS+="\n    environment:"
+  sed '/hostname: exp-627/,/environment:/ {
+    /links:/ {
+      n
+      : loop
+      /environment:/!{
+        N
+        b loop
+      }
+      c\
+  '"${EXP_627_LINKS}"'
+    }
+  }' $SYSTEM_COMPOSE_FILE > .tmp \
+  && mv .tmp $SYSTEM_COMPOSE_FILE
+  # Create stitcher Dockerfile
+  if [ ! -d $EXP_627_DIR ]; then mkdir $EXP_627_DIR; fi
+  echo "FROM $EXP_627_IMAGE" \
+    "\n\n# Installs CURL needed for the healthcheck test." \
+    "\nRUN apk --no-cache add curl" \
+    "\n\nCMD [ \"yarn\", \"start\" ]" > "${EXP_627_DIR}Dockerfile"
+  
+  # Clean workspace-compose.yml elixir-app services
+  ELIXIR_APPS_LINE=($(
+    grep -n "# Elixir Apps" "$SYSTEM_COMPOSE_FILE" | cut -d ":" -f 1
+  )) \
+  && sed "${ELIXIR_APPS_LINE[-1]}q" $SYSTEM_COMPOSE_FILE > .tmp \
+  && mv .tmp $SYSTEM_COMPOSE_FILE \
+  && for SERVICE in $SERVICES; do
+    # Dockerfile creation
+    IMAGE=$( jq -r '.services.'\"$SERVICE\"'.image' $CONFIG_FILE ) \
+    && echo "FROM $IMAGE" \
+      "\n\n# Install the curl package needed for docker compose healthcheck." \
+      "\nRUN apt update -y && apt install curl -y" \
+      "\n\n# Copies and makes excecutable the script to start the service." \
+      "\nCOPY /elixir-apps/run.sh ./" \
+      "\nRUN chmod +x run.sh" \
+      "\n\nCMD [\"./run.sh\"]" > "elixir-apps/$SERVICE.Dockerfile"
+    # workspace-compose.yml services append
+    ENV_VARS=$(
+      jq -r \
+      '.services.'\"$SERVICE\"'.environment | to_entries[] | "      \(.key): \(.value)"' \
+      $CONFIG_FILE
+    ) \
+    && if [ $SERVICE == "user" ]; then
+      DEPENDS_ON="      auth:"
+      DEPENDS_ON+="\n        condition: service_healthy"
+      DEPENDS_ON+="\n      elixir-apps-db:"
+      DEPENDS_ON+="\n        condition: service_healthy"
+    else
+      DEPENDS_ON="      elixir-apps-db:"
+      DEPENDS_ON+="\n        condition: service_healthy"
+    fi \
+    && SERVICE_PORT=$( jq -r '.services.'\"$SERVICE\"'.port' $CONFIG_FILE ) \
+    && echo "\n  $SERVICE:" \
+      "\n    container_name: $SERVICE" \
+      "\n    hostname: $SERVICE" \
+      "\n    build:" \
+      "\n      dockerfile: ./elixir-apps/$SERVICE.Dockerfile" \
+      "\n    platform: \$PLATFORM" \
+      "\n    env_file:" \
+      "\n      - \$ELIXIR_APP_ENV_FILE" \
+      "\n    ports:" \
+      "\n      - $SERVICE_PORT:\$CONTAINER_ELIXIR_APP_PORT" \
+      "\n    environment:" \
+      "\n$ENV_VARS" \
+      "\n    healthcheck:" \
+      "\n      test: curl --fail http://localhost:\$CONTAINER_ELIXIR_APP_PORT/api/graphiql?query=. || exit 1" \
+      "\n      timeout: 45s" \
+      "\n      interval: 10s" \
+      "\n      retries: 10" \
+      "\n    depends_on:" \
+      "\n$DEPENDS_ON" \
+      "\n    links:" \
+      "\n      - elixir-apps-db" \
+      "\n    volumes:" \
+      "\n      - ./\$SETUP_PROPERTIES_FILE:/\$SETUP_PROPERTIES_FILE" \
+      >> $SYSTEM_COMPOSE_FILE
+  done
+
+  # Export Valiot-App services port enviroment variables
+  WSPACE_UI_ENV_VARS=""
+  WSPACE_UI_RUNTIME=""
+  WSPACE_UI_GRAPHIQL_HTML=""
+  WSPACE_UI_DASH_HTML=""
+  for SERVICE in $SERVICES; do
+    SERVICE_PORT=$( jq -r '.services.'\"$SERVICE\"'.port' $CONFIG_FILE )
+    SERVICE_SNAKE=$(echo $SERVICE | sed 's/-/_/')
+    SERVICE_CAPITAL=$(echo $SERVICE | sed 's/-/ /' | sed -E 's/(^| )(.)/\1\u\2/g')
+    SERVICE_VAR_NAME="${SERVICE_SNAKE^^}_PORT"
+    eval "export ${SERVICE_VAR_NAME}='${SERVICE_PORT}'"
+
+    WSPACE_UI_ENV_VARS+="\n      $SERVICE_VAR_NAME: \$$SERVICE_VAR_NAME"
+    WSPACE_UI_RUNTIME+="\n\n      $SERVICE_SNAKE: %{"
+    WSPACE_UI_RUNTIME+="\n        host: \"$SERVICE\","
+    WSPACE_UI_RUNTIME+="\n        host_port: ("
+    WSPACE_UI_RUNTIME+="\n          System.get_env(\"$SERVICE_VAR_NAME\") ||"
+    WSPACE_UI_RUNTIME+="\n            raise RuntimeError, \"\"\""
+    WSPACE_UI_RUNTIME+="\n            The environment variable $SERVICE_VAR_NAME is not set."
+    WSPACE_UI_RUNTIME+="\n            \"\"\""
+    WSPACE_UI_RUNTIME+="\n        ),"
+    WSPACE_UI_RUNTIME+="\n        network_port: internal_elixir_app_port"
+    WSPACE_UI_RUNTIME+="\n      },"
+    WSPACE_UI_GRAPHIQL_HTML+="\n          service: {:${SERVICE_SNAKE}_graphiql,"
+    WSPACE_UI_GRAPHIQL_HTML+=" \"$SERVICE_CAPITAL\", \"/api/graphiql\"},"
+    WSPACE_UI_DASH_HTML+="\n          service: {:${SERVICE_SNAKE}_dash,"
+    WSPACE_UI_DASH_HTML+=" \"$SERVICE_CAPITAL\", \"/dashboard\"},"
+  done \
+  && WSPACE_UI_GRAPHIQL_HTML=${WSPACE_UI_GRAPHIQL_HTML::-1} \
+  && WSPACE_UI_DASH_HTML=${WSPACE_UI_DASH_HTML::-1}
+
+  # Set Valiot-App services port enviroment variables in tools-compose.yml
+  RANGE_INIT=$(
+    grep -n "# Valiot-App services ports" $TOOLS_COMPOSE_FILE | cut -d ':' -f 1
+  )
+  RANGE_END=$(
+    grep -n "# End of Valiot-App services ports" $TOOLS_COMPOSE_FILE | cut -d ':' -f 1
+  )
+  WSPACE_UI_ENV_VARS="    # Valiot-App services ports$WSPACE_UI_ENV_VARS\n"
+  WSPACE_UI_ENV_VARS+="      # End of Valiot-App services ports"
+  sed "${RANGE_INIT},${RANGE_END}c\\
+  ${WSPACE_UI_ENV_VARS}" $TOOLS_COMPOSE_FILE > .tmp \
+  && mv .tmp $TOOLS_COMPOSE_FILE
+  
+  # Set Valiot-App services port enviroment variables in runtime.exs
+  RUNTIME_FILE="./wspace-ui/src/config/runtime.exs"
+  RANGE_INIT=$(grep -n "# Valiot-App services" $RUNTIME_FILE | cut -d ':' -f 1)
+  RANGE_END=$(grep -n "# End of Valiot-App services" $RUNTIME_FILE | cut -d ':' -f 1)
+  WSPACE_UI_RUNTIME="    # Valiot-App services$WSPACE_UI_RUNTIME\n\n"
+  WSPACE_UI_RUNTIME+="      # End of Valiot-App services"
+  sed "${RANGE_INIT},${RANGE_END}c\\
+  ${WSPACE_UI_RUNTIME}" $RUNTIME_FILE > .tmp \
+  && mv .tmp $RUNTIME_FILE
+  
+  # Set Valiot-App services port enviroment variables in index.html.heex
+  INDEX_FILE="./wspace-ui/src/lib/wspace_ui_web/templates/page/index.html.heex"
+  # Graphiql links
+  RANGE_INIT=$( grep -n "# Graphiql init" $INDEX_FILE | cut -d ':' -f 1 )
+  RANGE_END=$( grep -n "# Graphiql end" $INDEX_FILE | cut -d ':' -f 1 )
+  WSPACE_UI_GRAPHIQL_HTML="        # Graphiql init$WSPACE_UI_GRAPHIQL_HTML\n"
+  WSPACE_UI_GRAPHIQL_HTML+="        # Graphiql end"
+  sed "${RANGE_INIT},${RANGE_END}c\\
+  ${WSPACE_UI_GRAPHIQL_HTML}" $INDEX_FILE > .tmp \
+  && mv .tmp $INDEX_FILE
+  # Dashboard links
+  RANGE_INIT=$( grep -n "# Dash init" $INDEX_FILE | cut -d ':' -f 1 )
+  RANGE_END=$( grep -n "# Dash end" $INDEX_FILE | cut -d ':' -f 1 )
+  WSPACE_UI_DASH_HTML="        # Dash init$WSPACE_UI_DASH_HTML\n"
+  WSPACE_UI_DASH_HTML+="        # Dash end"
+  sed "${RANGE_INIT},${RANGE_END}c\\
+  ${WSPACE_UI_DASH_HTML}" $INDEX_FILE > .tmp \
+  && mv .tmp $INDEX_FILE
+
+# FUNCTIONS --------------------------------------------------------------------
+
+  # export_file <FILE>*
+    # Export the variables in the given file. The given file must have an .env
+    # file standard.
+  export_file() { FILE=$1 && set -a && . $FILE && set +a; }
+
+  # verbose [<COMMAND>...]
+    # If VERBOSE variable is set to true excecutes the commands. If VERBOSE 
+    # variable is set to false excecutes the commands with no terminal output.
+  verbose() { if [ $VERBOSE == "true" ]; then $@; else $@ &> /dev/null; fi; }
+  
+  # exit [<MESSAGE>...]
+    # Prints a message and exits with code 1
+  error() { echo $@ && exit 1; }
+
+  # args_error <ERROR> 
+    # Prints a default messages for argument errors.
+  args_error() {
+    if   [ "$1" == "missing" ];  then error "Missing arguments."
+    elif [ "$1" == "too_many" ]; then error "Too many arguments."
+    elif [ "$1" == "invalid" ];  then error "Invalid argument."
+    elif [ "$1" == "unknown" ];  then error "Unknown option: $2."
+    elif [ "$1" != "" ];         then error "$@"
+    else error "Argument error."; fi
+  }
+
+  # confirm [<MESSAGE>...]
+    # Prints MESSAGE and spects input prompt for continue or exit the script 
+  confirm() {
+    echo "⚠️  ${B}Warning${R}: $@"
+    read -n 1 -p $'Should continue? [y/N] ' INPUT
+    if [ "$INPUT" != "y" ]; then exit 0; fi
+    echo ""
+  }
+
+  # service_internal_port <SERVICE>*
+    # Prints the docker network port used by the respectively given service
+  service_internal_port() {
+    if   [ "$1" == "ui" ];      then echo $CONTAINER_UI_PORT
+    elif [ "$1" == "exp-627" ]; then echo $CONTAINER_EXP_627_PORT
+    elif [ "$1" == "worker" ];  then echo $CONTAINER_WORKER_PORT
+    else echo $CONTAINER_ELIXIR_APP_PORT
+    fi
+  }
+
+  # touch_env_files
+    # If does not exists the .env files it creates them so the docker compose
+    # command can run without "file not found" errors.
+  touch_env_files() {
+    if    [ ! -d $VALIOT_APP_DOC_DIR ]; then mkdir $VALIOT_APP_DOC_DIR; fi \
+    && if [ ! -d $VALIOT_APP_COVER_DIR ]; then mkdir $VALIOT_APP_COVER_DIR; fi \
+    && if [ ! -e $WORKER_ENV_FILE ]; then
+      if [ ! -d $WORKER_DIR ]; then mkdir $WORKER_DIR; fi \
+      && touch $WORKER_ENV_FILE
+    fi \
+    && if [ ! -e $ELIXIR_APP_ENV_FILE ]; then touch $ELIXIR_APP_ENV_FILE; fi \
+    && if [ ! -e $SETUP_PROPERTIES_FILE ]; then touch $SETUP_PROPERTIES_FILE; fi
+  }
+
+  # set_version
+    # To publish a release of this software use this command.
+    # Sets the given version in this very file, Wspace-UI mix.exs file and
+    # README.md file.
+  set_version() {
+    NEW_VERSION="$1" \
+    && WSPACE_MIX_FILE="./wspace-ui/src/mix.exs" \
+    && README_FILE="./README.md" \
+    && if [[ $NEW_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      confirm \
+        "This action will modify $0, $WSPACE_MIX_FILE and $README_FILE files."
+      
+      sed "s/version: \"[0-9]*.[0-9]*.[0-9]*\"/version: \"$NEW_VERSION\"/" \
+        $WSPACE_MIX_FILE > .tmp \
+      && mv .tmp $WSPACE_MIX_FILE \
+      && sed "s/wspace-ui | \*Source code v[0-9]*.[0-9]*.[0-9]*/wspace-ui | *Source code v$NEW_VERSION/" \
+        $README_FILE > .tmp \
+      && mv .tmp $README_FILE \
+      && sed "s/\[version - [0-9]*.[0-9]*.[0-9]*\]/[version - $NEW_VERSION]/" \
+        $README_FILE > .tmp \
+      && mv .tmp $README_FILE \
+      && sed "s/badge\/version-[0-9]*.[0-9]*.[0-9]*/badge\/version-$NEW_VERSION/" \
+        $README_FILE > .tmp \
+      && mv .tmp $README_FILE \
+      && sed "2s/.*/# v$NEW_VERSION/" $0 > .tmp \
+      && mv .tmp $0 \
+      && echo "Version ${B}$NEW_VERSION${R} is now set." \
+      && echo "Don't forget to update the CHANGELOG.md file and submit a PR!"
+    else error "$NEW_VERSION is not a valid version format."; fi
+  }
+
+  # setup
+    # Drops, recreates and runs migrations for all elixir app databases.
+    #
+    # Creates tokens and permissions in "auth" service for all elixir apps
+    # and the "worker" service, then creates .env files with those tokens for
+    # being used by the workspace-compose.yml script to configure the environment
+    # variables of those servises.
+  setup() {
+    # run_setup <APP>* <RUN_FILE>* [<RUN_ARGS>...]*
+    run_setup() {
+      APP=$1 \
+      && RUN_FILE=$2 \
+      && shift \
+      && shift \
+      && RUN_ARGS="$@" \
+      && verbose docker compose $ALL_COMPOSE run --name "${APP}___setup" --rm \
+        $APP $RUN_FILE $RUN_ARGS
+    }
+
+    # sucess_output <APP>*
+    sucess_output() {
+      APP=$1 \
+      && verbose echo "" \
+      && echo "Success! ${B}$APP${R} setup has been executed successfully." \
+      && verbose echo ""
+    }
+
+    # setup_app --result <SERVICE>* [<RUN_COMMAND_ARGS>...]
+      # `auth` service exports the following variables:
+      #   $APP_TOKEN_ID
+      #   $APP_TOKEN
+      #   $WORKER_TOKEN_ID
+      #   $WORKER_TOKEN
+      # `user` service exports the following variables:
+      #   $SUPER_USER_EMAIL
+      #   $SUPER_USER_PASS
+      #   $SUPER_USER_NAME
+      #   $SUPER_USER_LAST_NAME
+      #   $SUPER_USER_TOKEN_ID
+      #   $SUPER_USER_TOKEN
+      # `jobs` service exports the following variables:
+      #   $WORKER_NAME
+      #   $WORKER_CODE
+    setup_app() {
+      if [ $1 == "--result" ]; then RESULT=true && shift; fi \
+      && APP=$1 \
+      && shift \
+      && if [ "$RESULT" == true ]; then
+        RUN_ARGS="$APP.setup $SETUP_PROPERTIES_FILE $@"
+      else
+        RUN_ARGS="setup $@"
+      fi \
+      && run_setup $APP $RUN_FILE $RUN_ARGS \
+      && if [ "$RESULT" == true ]; then export_file $SETUP_PROPERTIES_FILE; fi \
+      && sucess_output $APP \
+      && unset RESULT
+    }
+    
+    # generate_elixir_apps_env_file
+    generate_elixir_apps_env_file() {
+      ENV="# elixir-apps.env\nSTITCH_AUTHORIZATION=\"Bearer $APP_TOKEN\"" \
+      && echo $ENV > $ELIXIR_APP_ENV_FILE
+    }
+    
+    # generate_worker_env_file
+    generate_worker_env_file() {
+      ENV="# worker.env\nWORKER=$WORKER_CODE\nTOKEN=\"Bearer $WORKER_TOKEN\"" \
+      && echo $ENV > $WORKER_ENV_FILE
+    }
+
+    # ------------------------------------------------------------------------
+
+    echo "" \
+    &&   TOKEN_TTL="72000000" \
+    &&       EMAIL="super@admin.io" \
+    &&        PASS="123-Abc." \
+    &&        NAME="John" \
+    &&   LAST_NAME="Doe" \
+    && WORKER_NAME="WSPACE" \
+    \
+    && setup_app --result auth  $TOKEN_TTL \
+    && generate_elixir_apps_env_file \
+    && setup_app --result user  $APP_TOKEN_ID $EMAIL $PASS $NAME $LAST_NAME \
+                                $WORKER_TOKEN_ID \
+    && setup_app --result jobs  $APP_TOKEN_ID $WORKER_TOKEN_ID $WORKER_NAME \
+                                $SUPER_USER_TOKEN_ID \
+    && generate_worker_env_file \
+    && for SERVICE in $SERVICES; do
+      if  [ $SERVICE != "auth" ] && \
+          [ $SERVICE != "user" ] && \
+          [ $SERVICE != "jobs" ]; then
+        setup_app $SERVICE $APP_TOKEN_ID $SUPER_USER_TOKEN_ID $WORKER_TOKEN_ID
+      fi
+    done
+    # CONTINUE
+  }
+
+  # up <COMPOSE_LIST>* --console [<SERVICE>] 
+    # Starts the whole docker compose configuration.
+    #
+    # If --console flag is given, it will print the terminal output of each
+    # service.
+    #
+    # If --console flag is given with arguments, it will print the terminal
+    # output of the given services.
+  up() {
+    # logo <MESSAGE>
+      # Prints the Valiot logo with a custom message.
+    logo() { echo "  \x1B[38;5;33m╲╱\x1B[38;5;41m╲╲${R}  $@"; }
+
+    # ------------------------------------------------------------------------
+
+    if [ $# -gt 0 ]; then
+      COMPOSE_LIST=$1 \
+      && shift \
+      && if [ $# -eq 1 ] && [ "$1" == "--console" ]; then
+        docker compose $COMPOSE_LIST up
+      elif [ $# -gt 1 ] && [ "$1" == "--console" ]; then
+        ATTATCH=$( for APP in $@; do echo -n "--attach $APP "; done ) \
+        && docker compose $COMPOSE_LIST up $ATTATCH
+      else
+        docker compose $COMPOSE_LIST up --wait \
+        && URL="http://localhost:$WSPACE_UI_PORT" \
+        && echo \
+          "\n${B}Deploy successfully done!" \
+          "${R}all servers are running now.\n" \
+        && logo "Valiot \x1B[38;5;8mComposed Workspace${R}" \
+        && echo \
+          "\nFor usage information visit:" \
+          "\x1B[38;5;4m\x1B]8;;$URL\a$URL\x1B]8;;\a${R}"
+      fi
+    else
+      echo "Argument COMPOSE_LIST is missing."
+    fi
+  }
+  
+  # readme
+    # Prints the usage documentation
+  readme() {    
+    echo \
+      "${B}$0 v$SCRIPT_VERSION${R} - Composed workspace management script\n" \
+      "\n" \
+      "${B}Usage${R} ────────────────────────────────────────────────────────────────────────────────────\n" \
+      "\n" \
+      "                         $0  ${C8}Shows a reduced version of this documentation.${R}\n" \
+      "               $0 ${V}<COMMAND>  ${C8}Runs a specific script task.${R}\n" \
+      "\n" \
+      "${B}Basic commands${R} ───────────────────────────────────────────────────────────────────────────\n" \
+      "\n" \
+      "  login ${V}<GITHUB_USER>${C1}* ${V}<TOKEN>${C1}*  ${C8}Authenticates Docker to being able to download all the\n" \
+      "                                 services images.${R}\n" \
+      "\n" \
+      "                           init  ${C8}Inicialization command:\n" \
+      "                                 1. Stops and removes all workspace containers if any.\n" \
+      "                                 2. Downloads (if they have not been downloaded before)\n" \
+      "                                    and builds all docker images.\n" \
+      "                                 3. Drops and recreates all services databases.\n" \
+      "                                 4. Runs migrations in all elixir app databases.\n" \
+      "                                 5. Creates tokens and permissions for specific services.\n" \
+      "                                 6. Starts all services.${R}\n" \
+      "\n" \
+      "                          build  ${C8}Downloads (if they have not been downloaded before) and\n" \
+      "                                 builds all docker images.${R}\n" \
+      "\n" \
+      "                          setup  ${C8}Services setup command:\n" \
+      "                                 1. Drops and recreates all services databases.\n" \
+      "                                 2. Runs migrations in all elixir app databases.\n" \
+      "                                 3. Creates tokens and permissions for specific services.${R}\n" \
+      "\n" \
+      "                    up ${V}<OPTION>  ${C8}Starts all services.\n" \
+      "                                 ${R}Options: ${C8}\n" \
+      "                                 ${R}--console ${C8} ${A}[${V}<SERVICE>${A}...] ${C8}\n" \
+      "                                   Prints the terminal output of all given services. If\n" \
+      "                                   none is given, it will print all containers output.${R}\n" \
+      "\n" \
+      " run ${V}<SERVICE>${C1}* ${V}<PORT>${C1}* ${A}[${V}<RUN_ARG>${A}...]  ${C8}Starts a single service (and its required ones to\n" \
+      "                                      start) in a specific port. Whenever the service is\n" \
+      "                                      a elixir app, RUN_ARG array will pass as\n" \
+      "                                      container initialization script arguments.${R}\n" \
+      "\n" \
+      "                 stop ${V}<SERVICE>  ${C8}Stops the given service. If none is given, stops all the\n" \
+      "                                 workspace services.${R}\n" \
+      "\n" \
+      "                           down  ${C8}Stops and deletes all services and the workspace\n" \
+      "                                 networks, volumes, and images (Workspace services must\n" \
+      "                                 be rebuilded).${R}\n" \
+      "\n" \
+      "                          reset  ${C8}Purges the docker environment, asking for confirmation.\n" \
+      "                                 Deletes all downloads, cache, networks, volumes, images\n" \
+      "                                 and containers. It will be needed to be excecuted the\n" \
+      "                                 whole initialization process again.${R}\n" \
+      "\n" \
+      "                           help  ${C8}Shows this documentation.${R}\n" \
+      "\n" \
+      "${B}Valiot App development commands${R} ──────────────────────────────────────────────────────────\n" \
+      "\n" \
+      "            valiot-app ${V}<OPTION>  ${C8}Starts all Valiot App services.\n" \
+      "                                 ${R}Options: ${C8}\n" \
+      "                                 ${R}--console ${C8} ${A}[${V}<SERVICE>${A}...] ${C8}\n" \
+      "                                   Prints the terminal output of all given services. If\n" \
+      "                                   none is given, it will print all containers output.${R}\n" \
+      "\n" \
+      "               valiot-app.build  ${C8}Downloads (if they have not been downloaded before) and\n" \
+      "                                 builds all Valiot App docker images.${R}\n" \
+      "\n" \
+      "                valiot-app.stop  ${C8}Stops all Valiot App services.${R}\n" \
+      "\n" \
+      "                 valiot-app.dev  ${C8}Starts the valiot-app service in development environment.${R}\n" \
+      "\n" \
+      "                 valiot-app.iex  ${C8}Starts the valiot-app service in development environment\n" \
+      "                                 within an Elixir interactive console.${R}\n" \
+      "\n" \
+      "  valiot-app.test ${A}[${V}<OPTION>${A}...]  ${C8}Runs the valiot-app service automated unit testing.\n" \
+      "                                 ${R}Options: ${C8}\n" \
+      "                                 It's possible to use all the mix command options, like\n" \
+      "                                 but not limited to ${R}--trace${C8}, ${R}--failed${C8}, ${R}--max_failures${C8},\n" \
+      "                                 ${R}--seed ${C8}or ${R}--only${C8}.${R}\n" \
+      "\n" \
+      "            valiot-app.coverage  ${C8}Starts the valiot-app service and runs the mix.coveralls\n" \
+      "                                 command to generate the unit testing coverage report.\n" \
+      "                                 Once it have completed, starts the valiot-app service in\n" \
+      "                                 development environment.${R}\n" \
+      "\n" \
+      "                valiot-app.prod  ${C8}Starts the valiot-app service in production environment.${R}\n" \
+      "\n" \
+      "  valiot-app.run ${A}[${V}<RUN_ARG>${A}...]  ${C8}Starts the valiot-app service passing the given\n" \
+      "                                 RUN_ARG array as container initialization script\n" \
+      "                                 arguments.${R}\n" \
+      "\n" \
+      "    valiot-app.setup ${V}<ENV=test>  ${C8}Valiot App database setup command:\n" \
+      "                                 ENV argument points to the environment database.\n" \
+      "                                 1. Drops and recreates the database.\n" \
+      "                                 2. Generates and runs migrations for the database.${R}\n"
+  }
+
+  # small_readme
+    # Prints a reduced version of the usage documentation
+  small_readme() {
+    echo \
+      "${B}$0 v$SCRIPT_VERSION${R} - Composed workspace management script\n" \
+      "\n" \
+      "  ${B}Usage:${R}\n" \
+      "    $0            ${C8}Shows this documentation.${R}\n" \
+      "    $0 ${V}<COMMAND>${R}  ${C8}Runs a specific script task.${R}\n" \
+      "\n" \
+      "  ${B}Basic Commands:${R}\n" \
+      "    login ${V}<GITHUB_USER>${C1}* ${V}<TOKEN>${C1}*${R}  ${C8}Authenticates to download services images.${R}\n" \
+      "                             init  ${C8}Inicialization command.${R}\n" \
+      "                            build  ${C8}Builds services docker images.${R}\n" \
+      "                            setup  ${C8}Services setup command.${R}\n" \
+      "                      up ${V}<OPTION>  ${C8}Starts all services.${R}\n" \
+      "                                   --console ${A}[${V}<SERVICE>${A}...]${R}\n" \
+      "                                     ${C8}Prints all containers or the given ones output.${R}\n" \
+      " run ${V}<SERVICE>${C1}* ${V}<PORT>${C1}*${R} ${A}[${V}<RUN_ARG>${A}...]  ${C8}Builds and starts a single service.${R}\n" \
+      "                   stop ${V}<SERVICE>${R}  ${C8}Stops all services or the given one.${R}\n" \
+      "                             down  ${C8}Stops and deletes all services, workspace\n" \
+      "                                   networks, volumes, and images.${R}\n" \
+      "                            reset  ${C8}Purges the docker environment.${R}\n" \
+      "                             help  ${C8}Shows the complete version of this documentation.${R}\n"
+  }
+
+# SCRIPT -----------------------------------------------------------------------
+
+  touch_env_files
+
+  if [ $# -gt 0 ]; then
+    # Basic commmands --------------------------------------------------------
+    if   [ "$1" == "help" ]; then
+      shift
+      if [ $# -eq 0 ]; then
+        readme
+      else
+        args_error too_many
+      fi
+      
+    elif [ "$1" == "login" ]; then
+      shift
+      if [ $# -lt 2 ]; then
+        error \
+          "User and/or token is missing.\n" \
+          "E.g: $0 login JohnDoe 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"
+      elif [ $# -eq 2 ]; then
+        echo "$2" | docker login ghcr.io -u "$1" --password-stdin
+      else
+        args_error too_many
+      fi
+
+    elif [ "$1" == "init" ]; then
+      shift
+      if [ $# -eq 0 ]; then
+        docker compose $TOOLS_COMPOSE stop \
+        && docker compose $VALIOT_APP_COMPOSE stop \
+        && docker compose $SYSTEM_COMPOSE stop \
+        && docker compose $ALL_COMPOSE down \
+        && docker compose $COMPOSE build --progress tty \
+        && setup \
+        && up "$COMPOSE"
+      else
+        args_error too_many
+      fi
+      
+    elif [ "$1" == "build" ]; then
+      shift
+      if [ $# -eq 0 ]; then
+        docker compose $COMPOSE build --progress tty
+      else
+        args_error too_many
+      fi
+
+    elif [ "$1" == "up" ]; then    
+      shift
+      if [ $# -eq 0 ]; then
+        up "$COMPOSE"
+      elif [ "${1:0:2}" == "--" ]; then
+        if [ "${1:2}" == "console" ]; then
+          # shift
+          up "$COMPOSE" $@
+        else
+          args_error unknown $1
+        fi
+      else
+        args_error too_many
+      fi
+
+    elif [ "$1" == "stop" ]; then
+      shift
+      if [ $# -lt 1 ]; then
+        docker compose $TOOLS_COMPOSE stop \
+        && docker compose $VALIOT_APP_COMPOSE stop \
+        && docker compose $SYSTEM_COMPOSE stop
+      elif [ $# -eq 1 ]; then
+        docker compose $COMPOSE stop $1
+      else
+        args_error too_many
+      fi
+      
+    elif [ "$1" == "down" ]; then
+      shift
+      if [ $# -eq 0 ]; then
+        confirm "This action will remove workspace configuration setup." \
+        && docker compose $TOOLS_COMPOSE stop \
+        && docker compose $VALIOT_APP_COMPOSE stop \
+        && docker compose $SYSTEM_COMPOSE stop \
+        && docker compose $ALL_COMPOSE down
+      else
+        args_error too_many
+      fi
+
+    elif [ "$1" == "setup" ]; then
+      shift
+      if [ $# -eq 0 ]; then
+        setup
+      else
+        args_error too_many
+      fi
+
+    elif [ "$1" == "reset" ]; then
+      shift
+      if [ $# -eq 0 ]; then
+        CONTAINERS_TO_STOP="$(docker container ls -q)" \
+        && if [ ! -z "$CONTAINERS_TO_STOP" ]; then
+          echo "Stopping all containers...\n" \
+          && docker stop $CONTAINERS_TO_STOP \
+          && echo "\nAll containers are Stopped.\n"
+        fi \
+        && docker system prune -a --volumes
+      else
+        args_error too_many
+      fi
+
+    elif [ "$1" == "run" ]; then
+      shift
+      if [ $# -lt 2 ]; then
+        args_error missing
+      elif [ $# -eq 2 ]; then
+        SERVICE=$1 \
+        && PORT=$2 \
+        && CONTAINER_PORT=$(service_internal_port $SERVICE) \
+        && docker compose $ALL_COMPOSE run \
+        -p "$PORT:$CONTAINER_PORT" --rm --name "${SERVICE}___temp-run" \
+        $SERVICE
+      else
+        SERVICE=$1 \
+        && PORT=$2 \
+        && CONTAINER_PORT=$(service_internal_port $SERVICE) \
+        && shift \
+        && shift \
+        && docker compose $ALL_COMPOSE run \
+        -p "$PORT:$CONTAINER_PORT" --rm --name "${SERVICE}___temp-run" \
+        $SERVICE $RUN_FILE run "$@"
+      fi
+
+    # Valiot App develop commmands -------------------------------------------
+    elif [ "${1:0:11}" == "valiot-app." ]; then
+      export TASK="${1:11}"
+      export GENERIC_TASKS=("dev" "iex" "coverage" "prod" "release")
+
+      if   [ "$TASK" == "up" ]; then
+        shift
+        if [ $# -eq 0 ]; then
+          up "$VALIOT_APP_COMPOSE $TOOLS_COMPOSE"
+        elif [ "${1:0:2}" == "--" ]; then
+          if [ "${1:2}" == "console" ]; then
+            # shift
+            up "$TOOLS_COMPOSE $VALIOT_APP_COMPOSE" $@
+          else
+            args_error unknown $1
+          fi
+        else
+          args_error too_many
+        fi
+
+      elif [ "$TASK" == "build" ]; then
+        shift
+        if [ $# -eq 0 ]; then
+          COMPOSE="$TOOLS_COMPOSE $VALIOT_APP_COMPOSE" \
+          && docker compose $COMPOSE build --progress tty
+        else
+          args_error too_many
+        fi
+
+      elif [ "$TASK" == "setup" ]; then
+        shift
+        if [ $# -lt 1 ]; then
+          docker compose $ALL_COMPOSE run --rm valiot-app $RUN_FILE $TASK test
+        elif [ $# -eq 1 ]; then
+          docker compose $ALL_COMPOSE run --rm \
+          valiot-app $RUN_FILE $TASK $1
+        else
+          args_error too_many
+        fi
+
+      elif [ "$TASK" == "stop" ]; then
+        shift
+        if [ $# -eq 0 ]; then
+          docker compose $VALIOT_APP_COMPOSE stop
+        else
+          args_error too_many
+        fi
+
+      elif [ "$TASK" == "test" ]; then
+        shift
+        if [ $# -eq 0 ]; then
+          docker compose $ALL_COMPOSE run --rm valiot-app $RUN_FILE $TASK
+        else
+          docker compose $ALL_COMPOSE run --rm valiot-app $RUN_FILE $TASK $@
+        fi
+
+      elif [ "$TASK" == "run" ]; then
+        shift
+        docker compose $ALL_COMPOSE run --rm --name "valiot-app___temp-run" \
+          valiot-app $RUN_FILE $TASK $@
+
+      elif [[ " ${GENERIC_TASKS[@]} " =~ " $TASK " ]]; then
+        shift
+        if [ $# -eq 0 ]; then
+          docker compose $ALL_COMPOSE run \
+          --rm -p $VALIOT_APP_PORT:$CONTAINER_ELIXIR_APP_PORT \
+          valiot-app $RUN_FILE $TASK
+        else
+          args_error too_many
+        fi
+
+      else
+        error "Invalid 'valiot-app' task."
+      fi
+    
+    # Wspace maintenance commmands -------------------------------------------
+    # (Only for Composed Workspace system development)
+    elif [ "$1" == "set-version" ]; then
+      shift
+      if [ $# -lt 1 ]; then
+        error "Version is missing. Try add a version as command argument."
+      elif [ $# -eq 1 ]; then
+        set_version $1
+      else
+        args_error too_many
+      fi
+
+    else
+      args_error invalid;
+    fi
+
+  else # No arguments (Default)
+    small_readme;
+  fi

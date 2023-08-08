@@ -1,0 +1,2 @@
+elixir-apps-db:5432:*:postgres:postgres
+valiot-app-db:5432:*:postgres:postgres
